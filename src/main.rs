@@ -18,6 +18,7 @@ const DELTA: f32 = 0.002;
 const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
+const BONUS_PROPORTION: f32 = 0.1;
 
 fn main() -> GameResult {
     let c = conf::Conf::new();
@@ -228,11 +229,25 @@ impl EventHandler<GameError> for State {
                 }
                 Content::Explosion(i) => {
                     if i.elapsed() >= EXPLOSION_TIMEOUT {
-                        self.world.walls[y][x] = Content::Nothing // todo maybe add a bonus
+                        if random::<f32>() <= BONUS_PROPORTION {
+                            self.world.walls[y][x] = Content::Bonus(Bonus {})
+                        } else {
+                            self.world.walls[y][x] = Content::Nothing
+                        }
                     }
                 }
                 _ => {}
             }
+        }
+
+        match self.world.walls[self.player.pos_y as usize][self.player.pos_x as usize] {
+            Content::Explosion(_) => println!("You died !"),
+            Content::Bonus(_) => {
+                println!("Here's a bonus ! ");
+                self.world.walls[self.player.pos_y as usize][self.player.pos_x as usize] =
+                    Content::Nothing
+            }
+            _ => {}
         }
 
         // update position
@@ -320,6 +335,20 @@ impl EventHandler<GameError> for State {
             1.,
             Color::new(0.5, 0.5, 0.5, 1.),
         )?;
+
+        let bonus = graphics::Mesh::new_rounded_rectangle(
+            ctx,
+            graphics::DrawMode::fill(),
+            Rect {
+                x: self.x_grid_to_window * 0.15,
+                y: self.y_grid_to_window * 0.15,
+                w: self.x_grid_to_window * 0.7,
+                h: self.y_grid_to_window * 0.7,
+            },
+            1.,
+            Color::new(1., 0.5, 0.6, 1.),
+        )?;
+
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
                 Content::Wall => {
@@ -356,6 +385,16 @@ impl EventHandler<GameError> for State {
                     graphics::draw(
                         ctx,
                         &breakable,
+                        (Vec2::new(
+                            x as f32 * self.x_grid_to_window,
+                            y as f32 * self.y_grid_to_window,
+                        ),),
+                    )?;
+                }
+                Content::Bonus(_) => {
+                    graphics::draw(
+                        ctx,
+                        &bonus,
                         (Vec2::new(
                             x as f32 * self.x_grid_to_window,
                             y as f32 * self.y_grid_to_window,
