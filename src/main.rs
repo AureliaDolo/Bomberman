@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -79,7 +79,7 @@ fn main() -> GameResult {
         y_grid_to_window,
         world,
         player_size,
-        players: vec![player1, player2],
+        players: vec![player1, player2].into_iter().enumerate().collect(),
     };
     let (ctx, event_loop) = ContextBuilder::new("bomberman", "Aurélia")
         .default_conf(c)
@@ -90,13 +90,14 @@ fn main() -> GameResult {
 }
 
 struct State {
-    players: Vec<Player>,
+    players: HashMap<usize, Player>,
     world: World,
     x_grid_to_window: f32,
     y_grid_to_window: f32,
     player_size: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
 struct Player {
     pos_x: f32,
     pos_y: f32,
@@ -157,6 +158,10 @@ impl World {
     }
 }
 impl State {
+    fn get_player(&self, player_id: usize) -> Player {
+        *self.players.get(&player_id).expect("Player not found")
+    }
+
     fn check_collision_up_right(&self, x: f32, y: f32) -> bool {
         let up_right = (
             ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window) as usize,
@@ -223,52 +228,64 @@ impl State {
         ctx: &mut ggez::Context,
     ) -> Result<(), GameError> {
         // bomb management
-        if keyboard::is_key_pressed(ctx, self.players[player_id].bomb) {
-            self.world.walls[self.players[player_id].pos_y as usize]
-                [self.players[player_id].pos_x as usize] = Content::Bomb(Instant::now(), player_id)
+        let player = self.get_player(player_id);
+        if keyboard::is_key_pressed(ctx, player.bomb) {
+            self.world.walls[player.pos_y as usize][player.pos_x as usize] =
+                Content::Bomb(Instant::now(), player_id)
         }
 
-        match self.world.walls[self.players[player_id].pos_y as usize]
-            [self.players[player_id].pos_x as usize]
-        {
+        match self.world.walls[player.pos_y as usize][player.pos_x as usize] {
             Content::Explosion(_, killer_id) => {
                 println!("Player {} was killed by player {}!", player_id, killer_id);
-                self.players[killer_id].kill_score += 1
+                self.players
+                    .get_mut(&killer_id)
+                    .expect("Player not found")
+                    .kill_score += 1;
+                self.players.remove(&player_id);
+                return Ok(());
             }
             Content::Bonus(_) => {
                 println!("Here's a bonus ! Player {} bomb range increased", player_id);
-                self.players[player_id].bomb_range += 1;
-                self.world.walls[self.players[player_id].pos_y as usize]
-                    [self.players[player_id].pos_x as usize] = Content::Nothing
+                self.players
+                    .get_mut(&player_id)
+                    .expect("Player not found")
+                    .bomb_range += 1;
+                self.world.walls[player.pos_y as usize][player.pos_x as usize] = Content::Nothing
             }
             _ => {}
         }
 
         // update position
-        let (mut new_x, mut new_y) = (self.players[player_id].pos_x, self.players[player_id].pos_y);
-        if keyboard::is_key_pressed(ctx, self.players[player_id].right)
+        let (mut new_x, mut new_y) = (player.pos_x, player.pos_y);
+        if keyboard::is_key_pressed(ctx, player.right)
             && !self.check_collision_right(new_x + DELTA, new_y)
         {
             new_x += DELTA
         }
-        if keyboard::is_key_pressed(ctx, self.players[player_id].left)
+        if keyboard::is_key_pressed(ctx, player.left)
             && !self.check_collision_left(new_x - DELTA, new_y)
         {
             new_x -= DELTA
         }
-        if keyboard::is_key_pressed(ctx, self.players[player_id].down)
+        if keyboard::is_key_pressed(ctx, player.down)
             && !self.check_collision_down(new_x, new_y + DELTA)
         {
             new_y += DELTA
         }
-        if keyboard::is_key_pressed(ctx, self.players[player_id].up)
+        if keyboard::is_key_pressed(ctx, player.up)
             && !self.check_collision_up(new_x, new_y - DELTA)
         {
             new_y -= DELTA
         }
 
-        self.players[player_id].pos_x = new_x;
-        self.players[player_id].pos_y = new_y;
+        self.players
+            .get_mut(&player_id)
+            .expect("Player not found")
+            .pos_x = new_x;
+        self.players
+            .get_mut(&player_id)
+            .expect("Player not found")
+            .pos_y = new_y;
 
         Ok(())
     }
@@ -312,7 +329,11 @@ impl EventHandler<GameError> for State {
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
                 Content::Bomb(i, killer_id) => {
-                    let range = self.players[killer_id].bomb_range;
+                    let range = self
+                        .players
+                        .get(&killer_id)
+                        .expect("Player not found")
+                        .bomb_range;
                     if i.elapsed() >= BOMB_TIMEOUT {
                         self.world.walls[y][x] = Content::Explosion(Instant::now(), killer_id);
                         self.propagate_explosion(x, y, -1, 0, range, killer_id)?; // up
@@ -463,7 +484,7 @@ impl EventHandler<GameError> for State {
                 _ => {}
             }
         }
-        for p in &self.players {
+        for (_, p) in &self.players {
             graphics::draw(
                 ctx,
                 &player,
