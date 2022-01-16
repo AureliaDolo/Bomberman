@@ -19,7 +19,7 @@ const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
 const BONUS_PROPORTION: f32 = 0.1;
-const BOMB_RANGE: u8 = 1;
+const BOMB_RANGE: usize = 1;
 
 fn main() -> GameResult {
     let c = conf::Conf::new();
@@ -263,6 +263,32 @@ impl State {
 
         Ok(())
     }
+
+    fn propagate_explosion(
+        &mut self,
+        x: usize,
+        y: usize,
+        delta_x: isize,
+        delta_y: isize,
+    ) -> GameResult {
+        for i in 1..=BOMB_RANGE {
+            let new_x = (x as isize + delta_x * i as isize) as usize;
+            let new_y = (y as isize + delta_y * i as isize) as usize;
+            if matches!(
+                // Ugly and assumes a at least size one border until the end of the world
+                self.world.walls[new_y][new_x],
+                Content::Wall
+            ) {
+                break;
+            } else if matches!(self.world.walls[new_y][new_x], Content::Breakable) {
+                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now());
+                break;
+            } else {
+                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl EventHandler<GameError> for State {
@@ -277,89 +303,10 @@ impl EventHandler<GameError> for State {
                 Content::Bomb(i) => {
                     if i.elapsed() >= BOMB_TIMEOUT {
                         self.world.walls[y][x] = Content::Explosion(Instant::now());
-                        // up
-                        for i in 1..=BOMB_RANGE {
-                            if matches!(
-                                // Ugly and assumes a at least size one border until the end of the world
-                                self.world.walls[y][x - i as usize],
-                                Content::Wall
-                            ) {
-                                break;
-                            } else if matches!(
-                                self.world.walls[y][x - i as usize],
-                                Content::Breakable
-                            ) {
-                                self.world.walls[y][x - i as usize] =
-                                    Content::Explosion(Instant::now());
-                                break;
-                            } else {
-                                self.world.walls[y][x - i as usize] =
-                                    Content::Explosion(Instant::now());
-                            }
-                        }
-
-                        // down
-                        for i in 1..=BOMB_RANGE {
-                            if matches!(
-                                // Ugly and assumes a at least size one border until the end of the world
-                                self.world.walls[y][x + i as usize],
-                                Content::Wall
-                            ) {
-                                break;
-                            } else if matches!(
-                                self.world.walls[y][x + i as usize],
-                                Content::Breakable
-                            ) {
-                                self.world.walls[y][x + i as usize] =
-                                    Content::Explosion(Instant::now());
-                                break;
-                            } else {
-                                self.world.walls[y][x + i as usize] =
-                                    Content::Explosion(Instant::now());
-                            }
-                        }
-
-                        // right
-                        for i in 1..=BOMB_RANGE {
-                            if matches!(
-                                // Ugly and assumes a at least size one border until the end of the world
-                                self.world.walls[y + i as usize][x],
-                                Content::Wall
-                            ) {
-                                break;
-                            } else if matches!(
-                                self.world.walls[y + i as usize][x],
-                                Content::Breakable
-                            ) {
-                                self.world.walls[y + i as usize][x] =
-                                    Content::Explosion(Instant::now());
-                                break;
-                            } else {
-                                self.world.walls[y + i as usize][x] =
-                                    Content::Explosion(Instant::now());
-                            }
-                        }
-
-                        // left
-                        for i in 1..=BOMB_RANGE {
-                            if matches!(
-                                // Ugly and assumes a at least size one border until the end of the world
-                                self.world.walls[y - i as usize][x],
-                                Content::Wall
-                            ) {
-                                break;
-                            } else if matches!(
-                                self.world.walls[y - i as usize][x],
-                                Content::Breakable
-                            ) {
-                                self.world.walls[y - i as usize][x] =
-                                    Content::Explosion(Instant::now());
-                                break;
-                            } else {
-                                self.world.walls[y - i as usize][x] =
-                                    Content::Explosion(Instant::now());
-                            }
-                        }
+                        self.propagate_explosion(x, y, -1, 0)?; // up
+                        self.propagate_explosion(x, y, 1, 0)?; // down
+                        self.propagate_explosion(x, y, 0, 1)?; // right
+                        self.propagate_explosion(x, y, 0, -1)?; // left
                     }
                 }
                 Content::Explosion(i) => {
