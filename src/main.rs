@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use ggez::{
     conf,
@@ -11,6 +14,8 @@ use glam::Vec2;
 use itertools::Itertools;
 
 const DELTA: f32 = 0.002;
+const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
+const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 
 fn main() -> GameResult {
     let c = conf::Conf::new();
@@ -70,7 +75,8 @@ enum Content {
     Nothing,
     Wall,
     Breakable,
-    Bomb,
+    Bomb(Instant),
+    Explosion(Instant),
     StartPoint,
     Bonus(Bonus),
 }
@@ -100,7 +106,7 @@ impl State {
 
         matches!(
             self.world.walls[up_right.1][up_right.0],
-            Content::Wall | Content::Breakable | Content::Bomb
+            Content::Wall | Content::Breakable //| Content::Bomb(_)
         )
     }
 
@@ -111,7 +117,7 @@ impl State {
         );
         matches!(
             self.world.walls[up_left.1][up_left.0],
-            Content::Wall | Content::Breakable | Content::Bomb
+            Content::Wall | Content::Breakable //| Content::Bomb(_)
         )
     }
 
@@ -122,7 +128,7 @@ impl State {
         );
         matches!(
             self.world.walls[down_right.1][down_right.0],
-            Content::Wall | Content::Breakable | Content::Bomb
+            Content::Wall | Content::Breakable // | Content::Bomb(_)
         )
     }
     fn check_collision_down_left(&self, x: f32, y: f32) -> bool {
@@ -132,7 +138,7 @@ impl State {
         );
         matches!(
             self.world.walls[down_left.1][down_left.0],
-            Content::Wall | Content::Breakable | Content::Bomb
+            Content::Wall | Content::Breakable //| Content::Bomb(_)
         )
     }
 
@@ -155,6 +161,40 @@ impl State {
 
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
+        // bomb management
+        if keyboard::is_key_pressed(ctx, KeyCode::Space) {
+            self.world.walls[self.pos_y as usize][self.pos_x as usize] =
+                Content::Bomb(Instant::now())
+        }
+
+        // explosions
+        for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
+            match self.world.walls[y][x] {
+                Content::Bomb(i) => {
+                    if i.elapsed() >= BOMB_TIMEOUT {
+                        for (i, j) in (-1..2_isize).cartesian_product(-1..2_isize) {
+                            if !matches!(
+                                // Ugly and assumes a at least size one border until the end of the world
+                                self.world.walls[(y as isize + j) as usize]
+                                    [(x as isize + i) as usize],
+                                Content::Wall
+                            ) {
+                                self.world.walls[(y as isize + j) as usize]
+                                    [(x as isize + i) as usize] = Content::Explosion(Instant::now())
+                            }
+                        }
+                    }
+                }
+                Content::Explosion(i) => {
+                    if i.elapsed() >= EXPLOSION_TIMEOUT {
+                        self.world.walls[y][x] = Content::Nothing // todo maybe add a bonus
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // update position
         let (mut new_x, mut new_y) = (self.pos_x, self.pos_y);
         if keyboard::is_key_pressed(ctx, KeyCode::Right)
             && !self.check_collision_right(new_x + DELTA, new_y)
@@ -197,6 +237,24 @@ impl EventHandler<GameError> for State {
             },
             Color::WHITE,
         )?;
+        let bomb = graphics::Mesh::new_circle(
+            ctx,
+            graphics::DrawMode::fill(),
+            Vec2::new(self.x_grid_to_window / 2., self.y_grid_to_window / 2.),
+            self.player_size / 2.,
+            0.01,
+            Color::BLACK,
+        )?;
+
+        let explosion = graphics::Mesh::new_circle(
+            ctx,
+            graphics::DrawMode::fill(),
+            Vec2::new(self.x_grid_to_window / 2., self.y_grid_to_window / 2.),
+            self.player_size / 2.,
+            0.01,
+            Color::RED,
+        )?;
+
         let brick = graphics::Mesh::new_rounded_rectangle(
             ctx,
             graphics::DrawMode::fill(),
@@ -207,7 +265,7 @@ impl EventHandler<GameError> for State {
                 h: self.y_grid_to_window,
             },
             0.1,
-            Color::RED,
+            Color::BLACK,
         )?;
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
@@ -215,6 +273,26 @@ impl EventHandler<GameError> for State {
                     graphics::draw(
                         ctx,
                         &brick,
+                        (Vec2::new(
+                            x as f32 * self.x_grid_to_window,
+                            y as f32 * self.y_grid_to_window,
+                        ),),
+                    )?;
+                }
+                Content::Explosion(_) => {
+                    graphics::draw(
+                        ctx,
+                        &explosion,
+                        (Vec2::new(
+                            x as f32 * self.x_grid_to_window,
+                            y as f32 * self.y_grid_to_window,
+                        ),),
+                    )?;
+                }
+                Content::Bomb(_) => {
+                    graphics::draw(
+                        ctx,
+                        &bomb,
                         (Vec2::new(
                             x as f32 * self.x_grid_to_window,
                             y as f32 * self.y_grid_to_window,
