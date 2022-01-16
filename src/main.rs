@@ -19,8 +19,6 @@ const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
 const BONUS_PROPORTION: f32 = 0.1;
-const BOMB_RANGE: usize = 1;
-
 fn main() -> GameResult {
     let c = conf::Conf::new();
     let height = 11;
@@ -60,6 +58,7 @@ fn main() -> GameResult {
         right: KeyCode::D,
         left: KeyCode::Q,
         bomb: KeyCode::W,
+        bomb_range: 1,
     };
     let start2 = choosen.next().unwrap();
     let player2 = Player {
@@ -70,6 +69,7 @@ fn main() -> GameResult {
         right: KeyCode::Right,
         left: KeyCode::Left,
         bomb: KeyCode::Space,
+        bomb_range: 1,
     };
     let state = State {
         x_grid_to_window,
@@ -102,6 +102,7 @@ struct Player {
     right: KeyCode,
     left: KeyCode,
     bomb: KeyCode,
+    bomb_range: usize,
 }
 
 struct World {
@@ -115,7 +116,7 @@ enum Content {
     Nothing,
     Wall,
     Breakable,
-    Bomb(Instant),
+    Bomb(Instant, usize),
     Explosion(Instant),
     StartPoint,
     Bonus(Bonus),
@@ -220,7 +221,8 @@ impl State {
         // bomb management
         if keyboard::is_key_pressed(ctx, self.players[player_id].bomb) {
             self.world.walls[self.players[player_id].pos_y as usize]
-                [self.players[player_id].pos_x as usize] = Content::Bomb(Instant::now())
+                [self.players[player_id].pos_x as usize] =
+                Content::Bomb(Instant::now(), self.players[player_id].bomb_range)
         }
 
         match self.world.walls[self.players[player_id].pos_y as usize]
@@ -228,7 +230,8 @@ impl State {
         {
             Content::Explosion(_) => println!("You died !"),
             Content::Bonus(_) => {
-                println!("Here's a bonus ! ");
+                println!("Here's a bonus ! Player {} bomb range increased", player_id);
+                self.players[player_id].bomb_range += 1;
                 self.world.walls[self.players[player_id].pos_y as usize]
                     [self.players[player_id].pos_x as usize] = Content::Nothing
             }
@@ -270,8 +273,9 @@ impl State {
         y: usize,
         delta_x: isize,
         delta_y: isize,
+        range: usize,
     ) -> GameResult {
-        for i in 1..=BOMB_RANGE {
+        for i in 1..=range {
             let new_x = (x as isize + delta_x * i as isize) as usize;
             let new_y = (y as isize + delta_y * i as isize) as usize;
             if matches!(
@@ -300,13 +304,13 @@ impl EventHandler<GameError> for State {
         // explosions
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
-                Content::Bomb(i) => {
+                Content::Bomb(i, range) => {
                     if i.elapsed() >= BOMB_TIMEOUT {
                         self.world.walls[y][x] = Content::Explosion(Instant::now());
-                        self.propagate_explosion(x, y, -1, 0)?; // up
-                        self.propagate_explosion(x, y, 1, 0)?; // down
-                        self.propagate_explosion(x, y, 0, 1)?; // right
-                        self.propagate_explosion(x, y, 0, -1)?; // left
+                        self.propagate_explosion(x, y, -1, 0, range)?; // up
+                        self.propagate_explosion(x, y, 1, 0, range)?; // down
+                        self.propagate_explosion(x, y, 0, 1, range)?; // right
+                        self.propagate_explosion(x, y, 0, -1, range)?; // left
                     }
                 }
                 Content::Explosion(i) => {
@@ -417,7 +421,7 @@ impl EventHandler<GameError> for State {
                         ),),
                     )?;
                 }
-                Content::Bomb(_) => {
+                Content::Bomb(..) => {
                     graphics::draw(
                         ctx,
                         &bomb,
