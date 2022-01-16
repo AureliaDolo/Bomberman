@@ -19,6 +19,7 @@ const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
 const BONUS_PROPORTION: f32 = 0.1;
+const BOMB_RANGE: u8 = 1;
 
 fn main() -> GameResult {
     let c = conf::Conf::new();
@@ -275,15 +276,88 @@ impl EventHandler<GameError> for State {
             match self.world.walls[y][x] {
                 Content::Bomb(i) => {
                     if i.elapsed() >= BOMB_TIMEOUT {
-                        for (i, j) in (-1..2_isize).cartesian_product(-1..2_isize) {
-                            if !matches!(
+                        self.world.walls[y][x] = Content::Explosion(Instant::now());
+                        // up
+                        for i in 1..=BOMB_RANGE {
+                            if matches!(
                                 // Ugly and assumes a at least size one border until the end of the world
-                                self.world.walls[(y as isize + j) as usize]
-                                    [(x as isize + i) as usize],
+                                self.world.walls[y][x - i as usize],
                                 Content::Wall
                             ) {
-                                self.world.walls[(y as isize + j) as usize]
-                                    [(x as isize + i) as usize] = Content::Explosion(Instant::now())
+                                break;
+                            } else if matches!(
+                                self.world.walls[y][x - i as usize],
+                                Content::Breakable
+                            ) {
+                                self.world.walls[y][x - i as usize] =
+                                    Content::Explosion(Instant::now());
+                                break;
+                            } else {
+                                self.world.walls[y][x - i as usize] =
+                                    Content::Explosion(Instant::now());
+                            }
+                        }
+
+                        // down
+                        for i in 1..=BOMB_RANGE {
+                            if matches!(
+                                // Ugly and assumes a at least size one border until the end of the world
+                                self.world.walls[y][x + i as usize],
+                                Content::Wall
+                            ) {
+                                break;
+                            } else if matches!(
+                                self.world.walls[y][x + i as usize],
+                                Content::Breakable
+                            ) {
+                                self.world.walls[y][x + i as usize] =
+                                    Content::Explosion(Instant::now());
+                                break;
+                            } else {
+                                self.world.walls[y][x + i as usize] =
+                                    Content::Explosion(Instant::now());
+                            }
+                        }
+
+                        // right
+                        for i in 1..=BOMB_RANGE {
+                            if matches!(
+                                // Ugly and assumes a at least size one border until the end of the world
+                                self.world.walls[y + i as usize][x],
+                                Content::Wall
+                            ) {
+                                break;
+                            } else if matches!(
+                                self.world.walls[y + i as usize][x],
+                                Content::Breakable
+                            ) {
+                                self.world.walls[y + i as usize][x] =
+                                    Content::Explosion(Instant::now());
+                                break;
+                            } else {
+                                self.world.walls[y + i as usize][x] =
+                                    Content::Explosion(Instant::now());
+                            }
+                        }
+
+                        // left
+                        for i in 1..=BOMB_RANGE {
+                            if matches!(
+                                // Ugly and assumes a at least size one border until the end of the world
+                                self.world.walls[y - i as usize][x],
+                                Content::Wall
+                            ) {
+                                break;
+                            } else if matches!(
+                                self.world.walls[y - i as usize][x],
+                                Content::Breakable
+                            ) {
+                                self.world.walls[y - i as usize][x] =
+                                    Content::Explosion(Instant::now());
+                                break;
+                            } else {
+                                self.world.walls[y - i as usize][x] =
+                                    Content::Explosion(Instant::now());
                             }
                         }
                     }
