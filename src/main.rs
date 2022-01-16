@@ -49,10 +49,21 @@ fn main() -> GameResult {
     } else {
         y_grid_to_window * 0.8
     };
-    let start = start_points.choose(&mut rng).unwrap();
-    let player = Player {
-        pos_x: start.0 as f32 + 0.5,
-        pos_y: start.1 as f32 + 0.5,
+    let mut choosen = start_points.choose_multiple(&mut rng, 2);
+    let start1 = choosen.next().unwrap();
+    let player1 = Player {
+        pos_x: start1.0 as f32 + 0.5,
+        pos_y: start1.1 as f32 + 0.5,
+        up: KeyCode::Z,
+        down: KeyCode::S,
+        right: KeyCode::D,
+        left: KeyCode::Q,
+        bomb: KeyCode::W,
+    };
+    let start2 = choosen.next().unwrap();
+    let player2 = Player {
+        pos_x: start2.0 as f32 + 0.5,
+        pos_y: start2.1 as f32 + 0.5,
         up: KeyCode::Up,
         down: KeyCode::Down,
         right: KeyCode::Right,
@@ -64,7 +75,7 @@ fn main() -> GameResult {
         y_grid_to_window,
         world,
         player_size,
-        player,
+        players: vec![player1, player2],
     };
     let (ctx, event_loop) = ContextBuilder::new("bomberman", "Aurélia")
         .default_conf(c)
@@ -75,7 +86,7 @@ fn main() -> GameResult {
 }
 
 struct State {
-    player: Player,
+    players: Vec<Player>,
     world: World,
     x_grid_to_window: f32,
     y_grid_to_window: f32,
@@ -199,14 +210,64 @@ impl State {
     fn check_collision_right(&self, x: f32, y: f32) -> bool {
         self.check_collision_down_right(x, y) || self.check_collision_up_right(x, y)
     }
+
+    fn player_update(
+        &mut self,
+        player_id: usize,
+        ctx: &mut ggez::Context,
+    ) -> Result<(), GameError> {
+        // bomb management
+        if keyboard::is_key_pressed(ctx, self.players[player_id].bomb) {
+            self.world.walls[self.players[player_id].pos_y as usize]
+                [self.players[player_id].pos_x as usize] = Content::Bomb(Instant::now())
+        }
+
+        match self.world.walls[self.players[player_id].pos_y as usize]
+            [self.players[player_id].pos_x as usize]
+        {
+            Content::Explosion(_) => println!("You died !"),
+            Content::Bonus(_) => {
+                println!("Here's a bonus ! ");
+                self.world.walls[self.players[player_id].pos_y as usize]
+                    [self.players[player_id].pos_x as usize] = Content::Nothing
+            }
+            _ => {}
+        }
+
+        // update position
+        let (mut new_x, mut new_y) = (self.players[player_id].pos_x, self.players[player_id].pos_y);
+        if keyboard::is_key_pressed(ctx, self.players[player_id].right)
+            && !self.check_collision_right(new_x + DELTA, new_y)
+        {
+            new_x += DELTA
+        }
+        if keyboard::is_key_pressed(ctx, self.players[player_id].left)
+            && !self.check_collision_left(new_x - DELTA, new_y)
+        {
+            new_x -= DELTA
+        }
+        if keyboard::is_key_pressed(ctx, self.players[player_id].down)
+            && !self.check_collision_down(new_x, new_y + DELTA)
+        {
+            new_y += DELTA
+        }
+        if keyboard::is_key_pressed(ctx, self.players[player_id].up)
+            && !self.check_collision_up(new_x, new_y - DELTA)
+        {
+            new_y -= DELTA
+        }
+
+        self.players[player_id].pos_x = new_x;
+        self.players[player_id].pos_y = new_y;
+
+        Ok(())
+    }
 }
 
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
-        // bomb management
-        if keyboard::is_key_pressed(ctx, self.player.bomb) {
-            self.world.walls[self.player.pos_y as usize][self.player.pos_x as usize] =
-                Content::Bomb(Instant::now())
+        for i in 0..self.players.len() {
+            self.player_update(i, ctx)?;
         }
 
         // explosions
@@ -239,42 +300,6 @@ impl EventHandler<GameError> for State {
                 _ => {}
             }
         }
-
-        match self.world.walls[self.player.pos_y as usize][self.player.pos_x as usize] {
-            Content::Explosion(_) => println!("You died !"),
-            Content::Bonus(_) => {
-                println!("Here's a bonus ! ");
-                self.world.walls[self.player.pos_y as usize][self.player.pos_x as usize] =
-                    Content::Nothing
-            }
-            _ => {}
-        }
-
-        // update position
-        let (mut new_x, mut new_y) = (self.player.pos_x, self.player.pos_y);
-        if keyboard::is_key_pressed(ctx, self.player.right)
-            && !self.check_collision_right(new_x + DELTA, new_y)
-        {
-            new_x += DELTA
-        }
-        if keyboard::is_key_pressed(ctx, self.player.left)
-            && !self.check_collision_left(new_x - DELTA, new_y)
-        {
-            new_x -= DELTA
-        }
-        if keyboard::is_key_pressed(ctx, self.player.down)
-            && !self.check_collision_down(new_x, new_y + DELTA)
-        {
-            new_y += DELTA
-        }
-        if keyboard::is_key_pressed(ctx, self.player.up)
-            && !self.check_collision_up(new_x, new_y - DELTA)
-        {
-            new_y -= DELTA
-        }
-
-        self.player.pos_x = new_x;
-        self.player.pos_y = new_y;
 
         Ok(())
     }
@@ -404,14 +429,16 @@ impl EventHandler<GameError> for State {
                 _ => {}
             }
         }
-        graphics::draw(
-            ctx,
-            &player,
-            (Vec2::new(
-                self.player.pos_x * self.x_grid_to_window,
-                self.player.pos_y * self.y_grid_to_window,
-            ),),
-        )?;
+        for p in &self.players {
+            graphics::draw(
+                ctx,
+                &player,
+                (Vec2::new(
+                    p.pos_x * self.x_grid_to_window,
+                    p.pos_y * self.y_grid_to_window,
+                ),),
+            )?;
+        }
 
         graphics::present(ctx)?;
         Ok(())
