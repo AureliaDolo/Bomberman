@@ -8,6 +8,7 @@ use ggez::{
     ContextBuilder, GameError, GameResult,
 };
 use glam::Vec2;
+use itertools::Itertools;
 
 const DELTA: f32 = 0.002;
 
@@ -26,11 +27,7 @@ fn main() -> GameResult {
         .collect();
     //let walls = HashSet::new();
 
-    let world = World {
-        height,
-        width,
-        walls,
-    };
+    let world = World::new(height, width, walls);
     let x_grid_to_window = c.window_mode.width / world.width as f32;
     let y_grid_to_window = c.window_mode.height / world.height as f32;
     let state = State {
@@ -63,57 +60,120 @@ struct State {
 }
 
 struct World {
-    height: u64,
-    width: u64,
-    walls: HashSet<(u64, u64)>,
+    height: usize,
+    width: usize,
+    walls: Vec<Vec<Content>>,
 }
 
-impl State {
-    fn collision(&self, x: f32, y: f32) -> bool {
-        let borders = vec![
-            (
-                ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window)
-                    as u64,
-                ((y * self.y_grid_to_window + self.player_size / 2.) / self.y_grid_to_window)
-                    as u64,
-            ),
-            (
-                ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window)
-                    as u64,
-                ((y * self.y_grid_to_window - self.player_size / 2.) / self.y_grid_to_window)
-                    as u64,
-            ),
-            (
-                ((x * self.x_grid_to_window - self.player_size / 2.) / self.x_grid_to_window)
-                    as u64,
-                ((y * self.y_grid_to_window + self.player_size / 2.) / self.y_grid_to_window)
-                    as u64,
-            ),
-            (
-                ((x * self.x_grid_to_window - self.player_size / 2.) / self.x_grid_to_window)
-                    as u64,
-                ((y * self.y_grid_to_window - self.player_size / 2.) / self.y_grid_to_window)
-                    as u64,
-            ),
-        ]
-        .into_iter()
-        .collect::<HashSet<_>>();
-        self.world.walls.intersection(&borders).next().is_some()
+#[derive(Debug, Clone, Copy)]
+enum Content {
+    Nothing,
+    Wall,
+    Breakable,
+    Bomb,
+    StartPoint,
+    Bonus(Bonus),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bonus {}
+
+impl World {
+    fn new(height: usize, width: usize, walls_set: HashSet<(usize, usize)>) -> World {
+        let mut walls = vec![vec![Content::Nothing; width]; height];
+        for (x, y) in walls_set {
+            walls[x][y] = Content::Wall
+        }
+        World {
+            height,
+            width,
+            walls,
+        }
     }
 }
+impl State {
+    fn check_collision_up_right(&self, x: f32, y: f32) -> bool {
+        let up_right = (
+            ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window) as usize,
+            ((y * self.y_grid_to_window - self.player_size / 2.) / self.y_grid_to_window) as usize,
+        );
+
+        matches!(
+            self.world.walls[up_right.1][up_right.0],
+            Content::Wall | Content::Breakable | Content::Bomb
+        )
+    }
+
+    fn check_collision_up_left(&self, x: f32, y: f32) -> bool {
+        let up_left = (
+            ((x * self.x_grid_to_window - self.player_size / 2.) / self.x_grid_to_window) as usize,
+            ((y * self.y_grid_to_window - self.player_size / 2.) / self.y_grid_to_window) as usize,
+        );
+        matches!(
+            self.world.walls[up_left.1][up_left.0],
+            Content::Wall | Content::Breakable | Content::Bomb
+        )
+    }
+
+    fn check_collision_down_right(&self, x: f32, y: f32) -> bool {
+        let down_right = (
+            ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window) as usize,
+            ((y * self.y_grid_to_window + self.player_size / 2.) / self.y_grid_to_window) as usize,
+        );
+        matches!(
+            self.world.walls[down_right.1][down_right.0],
+            Content::Wall | Content::Breakable | Content::Bomb
+        )
+    }
+    fn check_collision_down_left(&self, x: f32, y: f32) -> bool {
+        let down_left = (
+            ((x * self.x_grid_to_window - self.player_size / 2.) / self.x_grid_to_window) as usize,
+            ((y * self.y_grid_to_window + self.player_size / 2.) / self.y_grid_to_window) as usize,
+        );
+        matches!(
+            self.world.walls[down_left.1][down_left.0],
+            Content::Wall | Content::Breakable | Content::Bomb
+        )
+    }
+
+    fn check_collision_up(&self, x: f32, y: f32) -> bool {
+        self.check_collision_up_left(x, y) || self.check_collision_up_right(x, y)
+    }
+
+    fn check_collision_down(&self, x: f32, y: f32) -> bool {
+        self.check_collision_down_left(x, y) || self.check_collision_down_right(x, y)
+    }
+
+    fn check_collision_left(&self, x: f32, y: f32) -> bool {
+        self.check_collision_up_left(x, y) || self.check_collision_down_left(x, y)
+    }
+
+    fn check_collision_right(&self, x: f32, y: f32) -> bool {
+        self.check_collision_down_right(x, y) || self.check_collision_up_right(x, y)
+    }
+}
+
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
         let (mut new_x, mut new_y) = (self.pos_x, self.pos_y);
-        if keyboard::is_key_pressed(ctx, KeyCode::Right) && !self.collision(new_x + DELTA, new_y) {
+        if keyboard::is_key_pressed(ctx, KeyCode::Right)
+            && !self.check_collision_right(new_x + DELTA, new_y)
+        {
             new_x += DELTA
         }
-        if keyboard::is_key_pressed(ctx, KeyCode::Left) && !self.collision(new_x - DELTA, new_y) {
+        if keyboard::is_key_pressed(ctx, KeyCode::Left)
+            && !self.check_collision_left(new_x - DELTA, new_y)
+        {
             new_x -= DELTA
         }
-        if keyboard::is_key_pressed(ctx, KeyCode::Down) && !self.collision(new_x, new_y + DELTA) {
+        if keyboard::is_key_pressed(ctx, KeyCode::Down)
+            && !self.check_collision_down(new_x, new_y + DELTA)
+        {
             new_y += DELTA
         }
-        if keyboard::is_key_pressed(ctx, KeyCode::Up) && !self.collision(new_x, new_y - DELTA) {
+        if keyboard::is_key_pressed(ctx, KeyCode::Up)
+            && !self.check_collision_up(new_x, new_y - DELTA)
+        {
             new_y -= DELTA
         }
 
@@ -147,17 +207,22 @@ impl EventHandler<GameError> for State {
                 h: self.y_grid_to_window,
             },
             0.1,
-            Color::GREEN,
+            Color::RED,
         )?;
-        for wall in &self.world.walls {
-            graphics::draw(
-                ctx,
-                &brick,
-                (Vec2::new(
-                    wall.0 as f32 * self.x_grid_to_window,
-                    wall.1 as f32 * self.y_grid_to_window,
-                ),),
-            )?;
+        for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
+            match self.world.walls[y][x] {
+                Content::Wall => {
+                    graphics::draw(
+                        ctx,
+                        &brick,
+                        (Vec2::new(
+                            x as f32 * self.x_grid_to_window,
+                            y as f32 * self.y_grid_to_window,
+                        ),),
+                    )?;
+                }
+                _ => {}
+            }
         }
         graphics::draw(
             ctx,
