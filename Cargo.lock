@@ -136,6 +136,7 @@ dependencies = [
  "ggez",
  "glam",
  "itertools",
+ "rand",
 ]
 
 [[package]]

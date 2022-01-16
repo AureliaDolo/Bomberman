@@ -12,10 +12,12 @@ use ggez::{
 };
 use glam::Vec2;
 use itertools::Itertools;
+use rand::random;
 
 const DELTA: f32 = 0.002;
 const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
+const BREAKABLE_PROPORTION: f32 = 0.6;
 
 fn main() -> GameResult {
     let c = conf::Conf::new();
@@ -89,6 +91,16 @@ impl World {
         let mut walls = vec![vec![Content::Nothing; width]; height];
         for (x, y) in walls_set {
             walls[x][y] = Content::Wall
+        }
+        walls[1][1] = Content::StartPoint;
+        walls[height - 2][1] = Content::StartPoint;
+        walls[1][width - 2] = Content::StartPoint;
+        walls[height - 2][width - 2] = Content::StartPoint;
+
+        for (x, y) in (0..width).cartesian_product(0..height) {
+            if matches!(walls[y][x], Content::Nothing) && random::<f32>() < BREAKABLE_PROPORTION {
+                walls[y][x] = Content::Breakable
+            }
         }
         World {
             height,
@@ -267,6 +279,18 @@ impl EventHandler<GameError> for State {
             0.1,
             Color::BLACK,
         )?;
+        let breakable = graphics::Mesh::new_rounded_rectangle(
+            ctx,
+            graphics::DrawMode::fill(),
+            Rect {
+                x: self.x_grid_to_window * 0.05,
+                y: self.y_grid_to_window * 0.05,
+                w: self.x_grid_to_window * 0.9,
+                h: self.y_grid_to_window * 0.9,
+            },
+            1.,
+            Color::new(0.5, 0.5, 0.5, 1.),
+        )?;
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
                 Content::Wall => {
@@ -293,6 +317,16 @@ impl EventHandler<GameError> for State {
                     graphics::draw(
                         ctx,
                         &bomb,
+                        (Vec2::new(
+                            x as f32 * self.x_grid_to_window,
+                            y as f32 * self.y_grid_to_window,
+                        ),),
+                    )?;
+                }
+                Content::Breakable => {
+                    graphics::draw(
+                        ctx,
+                        &breakable,
                         (Vec2::new(
                             x as f32 * self.x_grid_to_window,
                             y as f32 * self.y_grid_to_window,
