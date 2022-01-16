@@ -14,11 +14,12 @@ use glam::Vec2;
 use itertools::Itertools;
 use rand::{prelude::SliceRandom, random, thread_rng};
 
-const DELTA: f32 = 0.002;
+const DELTA: f32 = 0.003;
 const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
 const BONUS_PROPORTION: f32 = 0.1;
+
 fn main() -> GameResult {
     let c = conf::Conf::new();
     let height = 11;
@@ -59,6 +60,7 @@ fn main() -> GameResult {
         left: KeyCode::Q,
         bomb: KeyCode::W,
         bomb_range: 1,
+        kill_score: 0,
     };
     let start2 = choosen.next().unwrap();
     let player2 = Player {
@@ -70,6 +72,7 @@ fn main() -> GameResult {
         left: KeyCode::Left,
         bomb: KeyCode::Space,
         bomb_range: 1,
+        kill_score: 0,
     };
     let state = State {
         x_grid_to_window,
@@ -103,6 +106,7 @@ struct Player {
     left: KeyCode,
     bomb: KeyCode,
     bomb_range: usize,
+    kill_score: u8,
 }
 
 struct World {
@@ -116,8 +120,8 @@ enum Content {
     Nothing,
     Wall,
     Breakable,
-    Bomb(Instant, usize),
-    Explosion(Instant),
+    Bomb(Instant, usize),      // player_id
+    Explosion(Instant, usize), // player_id
     StartPoint,
     Bonus(Bonus),
 }
@@ -221,14 +225,16 @@ impl State {
         // bomb management
         if keyboard::is_key_pressed(ctx, self.players[player_id].bomb) {
             self.world.walls[self.players[player_id].pos_y as usize]
-                [self.players[player_id].pos_x as usize] =
-                Content::Bomb(Instant::now(), self.players[player_id].bomb_range)
+                [self.players[player_id].pos_x as usize] = Content::Bomb(Instant::now(), player_id)
         }
 
         match self.world.walls[self.players[player_id].pos_y as usize]
             [self.players[player_id].pos_x as usize]
         {
-            Content::Explosion(_) => println!("You died !"),
+            Content::Explosion(_, killer_id) => {
+                println!("Player {} was killed by player {}!", player_id, killer_id);
+                self.players[killer_id].kill_score += 1
+            }
             Content::Bonus(_) => {
                 println!("Here's a bonus ! Player {} bomb range increased", player_id);
                 self.players[player_id].bomb_range += 1;
@@ -274,6 +280,7 @@ impl State {
         delta_x: isize,
         delta_y: isize,
         range: usize,
+        player_id: usize,
     ) -> GameResult {
         for i in 1..=range {
             let new_x = (x as isize + delta_x * i as isize) as usize;
@@ -285,10 +292,10 @@ impl State {
             ) {
                 break;
             } else if matches!(self.world.walls[new_y][new_x], Content::Breakable) {
-                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now());
+                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now(), player_id);
                 break;
             } else {
-                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now());
+                self.world.walls[new_y][new_x] = Content::Explosion(Instant::now(), player_id);
             }
         }
         Ok(())
@@ -304,16 +311,18 @@ impl EventHandler<GameError> for State {
         // explosions
         for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
             match self.world.walls[y][x] {
-                Content::Bomb(i, range) => {
+                Content::Bomb(i, killer_id) => {
+                    let range = self.players[killer_id].bomb_range;
                     if i.elapsed() >= BOMB_TIMEOUT {
-                        self.world.walls[y][x] = Content::Explosion(Instant::now());
-                        self.propagate_explosion(x, y, -1, 0, range)?; // up
-                        self.propagate_explosion(x, y, 1, 0, range)?; // down
-                        self.propagate_explosion(x, y, 0, 1, range)?; // right
-                        self.propagate_explosion(x, y, 0, -1, range)?; // left
+                        self.world.walls[y][x] = Content::Explosion(Instant::now(), killer_id);
+                        self.propagate_explosion(x, y, -1, 0, range, killer_id)?; // up
+                        self.propagate_explosion(x, y, 1, 0, range, killer_id)?; // down
+                        self.propagate_explosion(x, y, 0, 1, range, killer_id)?; // right
+                        self.propagate_explosion(x, y, 0, -1, range, killer_id)?;
+                        // left
                     }
                 }
-                Content::Explosion(i) => {
+                Content::Explosion(i, _) => {
                     if i.elapsed() >= EXPLOSION_TIMEOUT {
                         if random::<f32>() <= BONUS_PROPORTION {
                             self.world.walls[y][x] = Content::Bonus(Bonus {})
@@ -411,7 +420,7 @@ impl EventHandler<GameError> for State {
                         ),),
                     )?;
                 }
-                Content::Explosion(_) => {
+                Content::Explosion(..) => {
                     graphics::draw(
                         ctx,
                         &explosion,
