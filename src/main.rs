@@ -8,13 +8,13 @@ use ggez::{
     event::{self, EventHandler, KeyCode},
     graphics::{self, Color, Rect},
     input::keyboard,
-    ContextBuilder, GameError, GameResult,
+    timer, ContextBuilder, GameError, GameResult,
 };
 use glam::Vec2;
 use itertools::Itertools;
 use rand::{prelude::SliceRandom, random, thread_rng};
 
-const DELTA: f32 = 0.003;
+const DELTA: f32 = 0.005;
 const BOMB_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const EXPLOSION_TIMEOUT: std::time::Duration = Duration::from_secs(3);
 const BREAKABLE_PROPORTION: f32 = 0.6;
@@ -61,6 +61,7 @@ fn main() -> GameResult {
         bomb: KeyCode::W,
         bomb_range: 1,
         kill_score: 0,
+        alive: true,
     };
     let start2 = choosen.next().unwrap();
     let player2 = Player {
@@ -73,6 +74,7 @@ fn main() -> GameResult {
         bomb: KeyCode::Space,
         bomb_range: 1,
         kill_score: 0,
+        alive: true,
     };
     let state = State {
         x_grid_to_window,
@@ -108,6 +110,7 @@ struct Player {
     bomb: KeyCode,
     bomb_range: usize,
     kill_score: u8,
+    alive: bool,
 }
 
 struct World {
@@ -229,6 +232,9 @@ impl State {
     ) -> Result<(), GameError> {
         // bomb management
         let player = self.get_player(player_id);
+        if !player.alive {
+            return Ok(());
+        }
         if keyboard::is_key_pressed(ctx, player.bomb) {
             self.world.walls[player.pos_y as usize][player.pos_x as usize] =
                 Content::Bomb(Instant::now(), player_id)
@@ -241,7 +247,10 @@ impl State {
                     .get_mut(&killer_id)
                     .expect("Player not found")
                     .kill_score += 1;
-                self.players.remove(&player_id);
+                self.players
+                    .get_mut(&player_id)
+                    .expect("Player not found")
+                    .alive = false;
                 return Ok(());
             }
             Content::Bonus(_) => {
@@ -321,38 +330,49 @@ impl State {
 
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
-        for i in 0..self.players.len() {
-            self.player_update(i, ctx)?;
+        if self
+            .players
+            .iter()
+            .fold(true, |acc, (_, p)| acc && !p.alive)
+        {
+            // all players are dead
+            ggez::event::quit(ctx)
         }
+        const DESIRED_FPS: u32 = 60;
+        while timer::check_update_time(ctx, DESIRED_FPS) {
+            for i in 0..self.players.len() {
+                self.player_update(i, ctx)?;
+            }
 
-        // explosions
-        for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
-            match self.world.walls[y][x] {
-                Content::Bomb(i, killer_id) => {
-                    let range = self
-                        .players
-                        .get(&killer_id)
-                        .expect("Player not found")
-                        .bomb_range;
-                    if i.elapsed() >= BOMB_TIMEOUT {
-                        self.world.walls[y][x] = Content::Explosion(Instant::now(), killer_id);
-                        self.propagate_explosion(x, y, -1, 0, range, killer_id)?; // up
-                        self.propagate_explosion(x, y, 1, 0, range, killer_id)?; // down
-                        self.propagate_explosion(x, y, 0, 1, range, killer_id)?; // right
-                        self.propagate_explosion(x, y, 0, -1, range, killer_id)?;
-                        // left
-                    }
-                }
-                Content::Explosion(i, _) => {
-                    if i.elapsed() >= EXPLOSION_TIMEOUT {
-                        if random::<f32>() <= BONUS_PROPORTION {
-                            self.world.walls[y][x] = Content::Bonus(Bonus {})
-                        } else {
-                            self.world.walls[y][x] = Content::Nothing
+            // explosions
+            for (x, y) in (0..self.world.width).cartesian_product(0..self.world.height) {
+                match self.world.walls[y][x] {
+                    Content::Bomb(i, killer_id) => {
+                        if i.elapsed() >= BOMB_TIMEOUT {
+                            let range = self
+                                .players
+                                .get(&killer_id)
+                                .expect("Player not found")
+                                .bomb_range;
+                            self.world.walls[y][x] = Content::Explosion(Instant::now(), killer_id);
+                            self.propagate_explosion(x, y, -1, 0, range, killer_id)?; // up
+                            self.propagate_explosion(x, y, 1, 0, range, killer_id)?; // down
+                            self.propagate_explosion(x, y, 0, 1, range, killer_id)?; // right
+                            self.propagate_explosion(x, y, 0, -1, range, killer_id)?;
+                            // left
                         }
                     }
+                    Content::Explosion(i, _) => {
+                        if i.elapsed() >= EXPLOSION_TIMEOUT {
+                            if random::<f32>() <= BONUS_PROPORTION {
+                                self.world.walls[y][x] = Content::Bonus(Bonus {})
+                            } else {
+                                self.world.walls[y][x] = Content::Nothing
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -484,15 +504,17 @@ impl EventHandler<GameError> for State {
                 _ => {}
             }
         }
-        for (_, p) in &self.players {
-            graphics::draw(
-                ctx,
-                &player,
-                (Vec2::new(
-                    p.pos_x * self.x_grid_to_window,
-                    p.pos_y * self.y_grid_to_window,
-                ),),
-            )?;
+        for p in self.players.values() {
+            if p.alive {
+                graphics::draw(
+                    ctx,
+                    &player,
+                    (Vec2::new(
+                        p.pos_x * self.x_grid_to_window,
+                        p.pos_y * self.y_grid_to_window,
+                    ),),
+                )?;
+            }
         }
 
         graphics::present(ctx)?;
