@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     time::{Duration, Instant},
 };
 
@@ -25,14 +25,14 @@ fn main() -> GameResult {
     let height = 11;
     let width = 11;
     let mut rng = thread_rng();
-    let start_points = vec![
+    let start_points = [
         (1, 1),
         (1, height - 2),
         (width - 2, 1),
         (width - 2, height - 2),
     ];
     let walls = (0..11)
-        .map(|i| vec![(0, i), (i, 0), (i, height - 1), (width - 1, i)])
+        .map(|i| [(0, i), (i, 0), (i, height - 1), (width - 1, i)])
         .flatten()
         .chain(
             (0..width / 2)
@@ -44,13 +44,11 @@ fn main() -> GameResult {
     let world = World::new(height, width, walls, &start_points);
     let x_grid_to_window = c.window_mode.width / world.width as f32;
     let y_grid_to_window = c.window_mode.height / world.height as f32;
-    let player_size = if x_grid_to_window < y_grid_to_window {
-        x_grid_to_window * 0.8
-    } else {
-        y_grid_to_window * 0.8
-    };
+    let player_size = x_grid_to_window.min(y_grid_to_window) * 0.8;
+
     let mut choosen = start_points.choose_multiple(&mut rng, 2);
-    let start1 = choosen.next().unwrap();
+    // Not supposed to fail.
+    let start1 = choosen.next().unwrap_or(&start_points[0]);
     let player1 = Player {
         pos_x: start1.0 as f32 + 0.5,
         pos_y: start1.1 as f32 + 0.5,
@@ -63,7 +61,7 @@ fn main() -> GameResult {
         kill_score: 0,
         alive: true,
     };
-    let start2 = choosen.next().unwrap();
+    let start2 = choosen.next().unwrap_or(&start_points[0]);
     let player2 = Player {
         pos_x: start2.0 as f32 + 0.5,
         pos_y: start2.1 as f32 + 0.5,
@@ -76,13 +74,15 @@ fn main() -> GameResult {
         kill_score: 0,
         alive: true,
     };
+
     let state = State {
         x_grid_to_window,
         y_grid_to_window,
         world,
         player_size,
-        players: vec![player1, player2].into_iter().enumerate().collect(),
+        players: [player1, player2],
     };
+
     let (ctx, event_loop) = ContextBuilder::new("bomberman", "Aurélia")
         .default_conf(c)
         .build()
@@ -92,14 +92,14 @@ fn main() -> GameResult {
 }
 
 struct State {
-    players: HashMap<usize, Player>,
+    players: [Player; 2],
     world: World,
     x_grid_to_window: f32,
     y_grid_to_window: f32,
     player_size: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct Player {
     pos_x: f32,
     pos_y: f32,
@@ -119,7 +119,7 @@ struct World {
     walls: Vec<Vec<Content>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Content {
     Nothing,
     Wall,
@@ -130,7 +130,7 @@ enum Content {
     Bonus(Bonus),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Bonus {}
 
 impl World {
@@ -161,10 +161,6 @@ impl World {
     }
 }
 impl State {
-    fn get_player(&self, player_id: usize) -> Player {
-        *self.players.get(&player_id).expect("Player not found")
-    }
-
     fn check_collision_up_right(&self, x: f32, y: f32) -> bool {
         let up_right = (
             ((x * self.x_grid_to_window + self.player_size / 2.) / self.x_grid_to_window) as usize,
@@ -231,71 +227,62 @@ impl State {
         ctx: &mut ggez::Context,
     ) -> Result<(), GameError> {
         // bomb management
-        let player = self.get_player(player_id);
-        if !player.alive {
-            return Ok(());
-        }
-        if keyboard::is_key_pressed(ctx, player.bomb) {
-            self.world.walls[player.pos_y as usize][player.pos_x as usize] =
-                Content::Bomb(Instant::now(), player_id)
-        }
-
-        match self.world.walls[player.pos_y as usize][player.pos_x as usize] {
-            Content::Explosion(_, killer_id) => {
-                println!("Player {} was killed by player {}!", player_id, killer_id);
-                self.players
-                    .get_mut(&killer_id)
-                    .expect("Player not found")
-                    .kill_score += 1;
-                self.players
-                    .get_mut(&player_id)
-                    .expect("Player not found")
-                    .alive = false;
+        {
+            let mut player = &mut self.players[player_id];
+            if !player.alive {
                 return Ok(());
             }
-            Content::Bonus(_) => {
-                println!("Here's a bonus ! Player {} bomb range increased", player_id);
-                self.players
-                    .get_mut(&player_id)
-                    .expect("Player not found")
-                    .bomb_range += 1;
-                self.world.walls[player.pos_y as usize][player.pos_x as usize] = Content::Nothing
+
+            if keyboard::is_key_pressed(ctx, player.bomb) {
+                self.world.walls[player.pos_y as usize][player.pos_x as usize] =
+                    Content::Bomb(Instant::now(), player_id)
             }
-            _ => {}
+
+            match self.world.walls[player.pos_y as usize][player.pos_x as usize] {
+                Content::Explosion(_, killer_id) => {
+                    println!("Player {} was killed by player {}!", player_id, killer_id);
+                    player.alive = false;
+                    self.players[killer_id].kill_score += 1;
+                    return Ok(());
+                }
+                Content::Bonus(_) => {
+                    println!("Here's a bonus ! Player {} bomb range increased", player_id);
+                    player.bomb_range += 1;
+                    self.world.walls[player.pos_y as usize][player.pos_x as usize] =
+                        Content::Nothing
+                }
+                _ => {}
+            }
         }
 
-        // update position
-        let (mut new_x, mut new_y) = (player.pos_x, player.pos_y);
-        if keyboard::is_key_pressed(ctx, player.right)
-            && !self.check_collision_right(new_x + DELTA, new_y)
         {
-            new_x += DELTA
+            let player = &self.players[player_id];
+            // update position
+            let (mut new_x, mut new_y) = (player.pos_x, player.pos_y);
+            if keyboard::is_key_pressed(ctx, player.right)
+                && !self.check_collision_right(new_x + DELTA, new_y)
+            {
+                new_x += DELTA
+            }
+            if keyboard::is_key_pressed(ctx, player.left)
+                && !self.check_collision_left(new_x - DELTA, new_y)
+            {
+                new_x -= DELTA
+            }
+            if keyboard::is_key_pressed(ctx, player.down)
+                && !self.check_collision_down(new_x, new_y + DELTA)
+            {
+                new_y += DELTA
+            }
+            if keyboard::is_key_pressed(ctx, player.up)
+                && !self.check_collision_up(new_x, new_y - DELTA)
+            {
+                new_y -= DELTA
+            }
+            let mut player = &mut self.players[player_id];
+            player.pos_y = new_y;
+            player.pos_x = new_x;
         }
-        if keyboard::is_key_pressed(ctx, player.left)
-            && !self.check_collision_left(new_x - DELTA, new_y)
-        {
-            new_x -= DELTA
-        }
-        if keyboard::is_key_pressed(ctx, player.down)
-            && !self.check_collision_down(new_x, new_y + DELTA)
-        {
-            new_y += DELTA
-        }
-        if keyboard::is_key_pressed(ctx, player.up)
-            && !self.check_collision_up(new_x, new_y - DELTA)
-        {
-            new_y -= DELTA
-        }
-
-        self.players
-            .get_mut(&player_id)
-            .expect("Player not found")
-            .pos_x = new_x;
-        self.players
-            .get_mut(&player_id)
-            .expect("Player not found")
-            .pos_y = new_y;
-
         Ok(())
     }
 
@@ -330,11 +317,7 @@ impl State {
 
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
-        if self
-            .players
-            .iter()
-            .fold(true, |acc, (_, p)| acc && !p.alive)
-        {
+        if self.players.iter().fold(true, |acc, p| acc && !p.alive) {
             // all players are dead
             ggez::event::quit(ctx)
         }
@@ -351,9 +334,10 @@ impl EventHandler<GameError> for State {
                         if i.elapsed() >= BOMB_TIMEOUT {
                             let range = self
                                 .players
-                                .get(&killer_id)
+                                .get(killer_id)
                                 .expect("Player not found")
                                 .bomb_range;
+
                             self.world.walls[y][x] = Content::Explosion(Instant::now(), killer_id);
                             self.propagate_explosion(x, y, -1, 0, range, killer_id)?; // up
                             self.propagate_explosion(x, y, 1, 0, range, killer_id)?; // down
@@ -364,10 +348,10 @@ impl EventHandler<GameError> for State {
                     }
                     Content::Explosion(i, _) => {
                         if i.elapsed() >= EXPLOSION_TIMEOUT {
-                            if random::<f32>() <= BONUS_PROPORTION {
-                                self.world.walls[y][x] = Content::Bonus(Bonus {})
+                            self.world.walls[y][x] = if random::<f32>() <= BONUS_PROPORTION {
+                                Content::Bonus(Bonus {})
                             } else {
-                                self.world.walls[y][x] = Content::Nothing
+                                Content::Nothing
                             }
                         }
                     }
@@ -504,7 +488,7 @@ impl EventHandler<GameError> for State {
                 _ => {}
             }
         }
-        for p in self.players.values() {
+        for p in self.players.iter() {
             if p.alive {
                 graphics::draw(
                     ctx,
