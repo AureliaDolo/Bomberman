@@ -1,5 +1,5 @@
 [package]
-name = "bonberman"
+name = "bomberman"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,3 +10,6 @@ ggez = "0.7"
 glam = "0.20.2"
 itertools = "0.10.3"
 rand = "0.8.4"
+
+[profile.bench]
+debug = true
