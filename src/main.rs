@@ -32,13 +32,8 @@ fn main() -> GameResult {
         (width - 2, height - 2),
     ];
     let walls = (0..11)
-        .map(|i| [(0, i), (i, 0), (i, height - 1), (width - 1, i)])
-        .flatten()
-        .chain(
-            (0..width / 2)
-                .map(|x| (0..height / 2).map(move |y| (2 * x, 2 * y)))
-                .flatten(),
-        )
+        .flat_map(|i| [(0, i), (i, 0), (i, height - 1), (width - 1, i)])
+        .chain((0..width / 2).flat_map(|x| (0..height / 2).map(move |y| (2 * x, 2 * y))))
         .collect();
 
     let world = World::new(height, width, walls, &start_points);
