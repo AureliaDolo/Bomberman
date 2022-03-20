@@ -312,7 +312,7 @@ impl State {
 
 impl EventHandler<GameError> for State {
     fn update(&mut self, ctx: &mut ggez::Context) -> Result<(), GameError> {
-        if self.players.iter().fold(true, |acc, p| acc && !p.alive) {
+        if self.players.iter().all(|p| !p.alive) {
             // all players are dead
             ggez::event::quit(ctx)
         }
