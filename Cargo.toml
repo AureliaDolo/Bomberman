@@ -10,6 +10,7 @@ ggez = "0.7"
 glam = "0.20.2"
 itertools = "0.10.3"
 rand = "0.8.4"
+bevy = { version = "0.6.0", features = ["dynamic"] }
 
 [profile.bench]
 debug = true
