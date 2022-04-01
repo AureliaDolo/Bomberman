@@ -1,4 +1,8 @@
-use bevy::prelude::*;
+use bevy::{
+    core::FixedTimestep,
+    prelude::*,
+    sprite::collide_aabb::{collide, Collision},
+};
 use glam::Vec2;
 
 const WINDOW_WIDTH: f32 = 480.;
@@ -7,6 +11,7 @@ const CELL_PER_ROW_COUNT: u32 = 11;
 const CELL_SIZE: f32 = WINDOW_WIDTH / CELL_PER_ROW_COUNT as f32;
 
 const PLAYER_SIZE: f32 = 0.85 * CELL_SIZE;
+const DELTA: f32 = 1.;
 
 #[derive(Component)]
 struct Player;
@@ -20,11 +25,40 @@ struct Bomb;
 #[derive(Component)]
 struct Wall;
 
+#[derive(Component)]
+struct NotTraversable;
+
+#[derive(Component)]
+struct Size(f32);
+
 #[derive(Component, Default)]
 struct Deltas {
     x: f32,
     y: f32,
 }
+
+impl Deltas {
+    fn norm(&mut self) {
+        if self.x != 0. && self.y != 0. {
+            let n = (self.x.powi(2) + self.y.powi(2)).sqrt();
+            self.x /= n;
+            self.y /= n;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.x = 0.;
+        self.y = 0.;
+    }
+}
+
+#[derive(SystemLabel, Debug, Hash, PartialEq, Eq, Clone)]
+enum Step {
+    Input,
+    Movement,
+    Death,
+}
+
 fn main() {
     App::new()
         .insert_resource(WindowDescriptor {
@@ -36,7 +70,13 @@ fn main() {
         })
         .add_plugins(DefaultPlugins)
         .add_startup_system(setup)
-        .add_system(player.system())
+        .add_system(register_input.label(Step::Input).before(Step::Movement))
+        .add_system(check_collision.label(Step::Input).before(Step::Movement))
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(FixedTimestep::step(1. / 60.))
+                .with_system(update_player_position.label(Step::Movement)),
+        )
         .run();
 }
 
@@ -54,7 +94,10 @@ fn setup(mut commands: Commands) {
             transform: Transform::from_translation(Vec3::new(0., 0., 0.0)),
             ..Default::default()
         })
-        .insert(Player);
+        .insert(Player)
+        .insert(Deltas::default())
+        .insert(NotTraversable)
+        .insert(Size(PLAYER_SIZE));
 
     // walls
     (0..11)
@@ -85,7 +128,9 @@ fn setup(mut commands: Commands) {
                     )),
                     ..Default::default()
                 })
-                .insert(Wall);
+                .insert(Wall)
+                .insert(NotTraversable)
+                .insert(Size(CELL_SIZE));
         });
 }
 
@@ -99,36 +144,86 @@ fn register_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut query: Query<(With<Player>, &mut Deltas)>,
 ) {
+    for (_, mut delta) in query.iter_mut() {
+        if keyboard_input.pressed(KeyCode::Left) {
+            delta.x -= DELTA;
+        }
+        if keyboard_input.pressed(KeyCode::Right) {
+            delta.x += DELTA;
+        }
+
+        if keyboard_input.pressed(KeyCode::Up) {
+            delta.y += DELTA;
+        }
+
+        if keyboard_input.pressed(KeyCode::Down) {
+            delta.y -= DELTA;
+        }
+        delta.norm();
+    }
 }
 
 /// called at fixed time ticks
 /// update the transforms
 /// reset deltas
 /// maybe spawn bombs
-fn update_player_position(
-    keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<(With<Player>, &mut Deltas, &mut Transform)>,
-) {
+fn update_player_position(mut query: Query<(With<Player>, &mut Deltas, &mut Transform)>) {
+    for (_, mut delta, mut trans) in query.iter_mut() {
+        trans.translation.x += delta.x;
+        trans.translation.y += delta.y;
+
+        trans.translation.x = trans.translation.x.clamp(
+            (-WINDOW_WIDTH + PLAYER_SIZE) / 2.,
+            (WINDOW_WIDTH - PLAYER_SIZE) / 2.,
+        );
+
+        trans.translation.y = trans.translation.y.clamp(
+            (-WINDOW_HEIGHT + PLAYER_SIZE) / 2.,
+            (WINDOW_HEIGHT - PLAYER_SIZE) / 2.,
+        );
+        delta.reset()
+    }
 }
 
 /// called before update_player_position
 /// clamp deltas
 /// maybe call at fixed time ticks
-/// check collision with wall and breakable
-fn check_collision(mut query: Query<(With<Player>, &mut Deltas, &mut Transform)>) {}
+/// check collision with wall and breakable and bomb
+fn check_collision(
+    mut players: Query<(&mut Deltas, &Transform, With<Player>, &Size)>,
+    obstacles: Query<(&Transform, With<NotTraversable>, &Size)>,
+) {
+    for (mut d, tp, _, ps) in players.iter_mut() {
+        for (to, _, os) in obstacles.iter() {
+            if let Some(collision) = collide(
+                tp.translation,
+                Vec2::new(ps.0, ps.0),
+                to.translation,
+                Vec2::new(os.0, os.0),
+            ) {
+                match collision {
+                    Collision::Left => d.x = d.x.min(0.),
+                    Collision::Right => d.x = d.x.max(0.),
+                    Collision::Top => d.y = d.y.max(0.),
+                    Collision::Bottom => d.y = d.y.min(0.),
+                }
+            }
+        }
+    }
+}
 
 /// check if explosion happened
 /// called at fixed timestamp
 /// if it exploded, spawn explosion
 /// despawn bomb
-fn explode(mut query: Query<(&Bomb)>) {}
+fn explode(mut query: Query<&Bomb>) {}
 
 /// called at fixed timestamp
 /// check if explosion has elapsed
 /// despawn explosion
-fn put_down_explosion(mut query: Query<(&Explosion)>) {}
+fn put_down_explosion(mut query: Query<&Explosion>) {}
 
-/// death
+/// check collision with explosion
 fn check_death(mut query: Query<(With<Player>, &mut Transform)>) {}
 
 fn player(
