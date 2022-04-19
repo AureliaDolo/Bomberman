@@ -4,23 +4,24 @@ use bevy::{
     sprite::collide_aabb::{collide, Collision},
 };
 use glam::Vec2;
+use std::time::Duration;
 
 const WINDOW_WIDTH: f32 = 480.;
 const WINDOW_HEIGHT: f32 = WINDOW_WIDTH;
 const CELL_PER_ROW_COUNT: u32 = 11;
 const CELL_SIZE: f32 = WINDOW_WIDTH / CELL_PER_ROW_COUNT as f32;
-
+const BOMB_COUNTDOWN: u64 = 3;
 const PLAYER_SIZE: f32 = 0.85 * CELL_SIZE;
 const DELTA: f32 = 1.;
 
 #[derive(Component)]
-struct Player;
+struct Player(u8, bool);
 
 #[derive(Component)]
 struct Explosion;
 
 #[derive(Component)]
-struct Bomb;
+struct Bomb(u8, Timer);
 
 #[derive(Component)]
 struct Wall;
@@ -72,6 +73,7 @@ fn main() {
         .add_startup_system(setup)
         .add_system(register_input.label(Step::Input).before(Step::Movement))
         .add_system(check_collision.label(Step::Input).before(Step::Movement))
+        .add_system(spawn_bombs.label(Step::Movement))
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(1. / 60.))
@@ -94,7 +96,7 @@ fn setup(mut commands: Commands) {
             transform: Transform::from_translation(Vec3::new(0., 0., 0.0)),
             ..Default::default()
         })
-        .insert(Player)
+        .insert(Player(1, false))
         .insert(Deltas::default())
         .insert(NotTraversable)
         .insert(Size(PLAYER_SIZE));
@@ -134,17 +136,18 @@ fn setup(mut commands: Commands) {
         });
 }
 
-fn align_on_grid(x: f32, y: f32) -> (f32, f32) {
-    (x, y)
+fn align_on_grid(x: f32) -> f32 {
+    let cell = ((x + WINDOW_WIDTH / 2.) / CELL_SIZE).floor();
+    cell * CELL_SIZE - WINDOW_WIDTH / 2. + CELL_SIZE / 2.
 }
 
 /// take input into consideration
 /// todo: maybe spawn bomb
 fn register_input(
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<(With<Player>, &mut Deltas)>,
+    mut query: Query<(&mut Player, &mut Deltas)>,
 ) {
-    for (_, mut delta) in query.iter_mut() {
+    for (mut p, mut delta) in query.iter_mut() {
         if keyboard_input.pressed(KeyCode::Left) {
             delta.x -= DELTA;
         }
@@ -159,6 +162,11 @@ fn register_input(
         if keyboard_input.pressed(KeyCode::Down) {
             delta.y -= DELTA;
         }
+
+        if keyboard_input.just_pressed(KeyCode::Space) {
+            p.1 = true;
+        }
+
         delta.norm();
     }
 }
@@ -182,6 +190,35 @@ fn update_player_position(mut query: Query<(With<Player>, &mut Deltas, &mut Tran
             (WINDOW_HEIGHT - PLAYER_SIZE) / 2.,
         );
         delta.reset()
+    }
+}
+
+fn spawn_bombs(mut query: Query<(&mut Player, &Transform)>, mut commands: Commands) {
+    for (mut p, trans) in query.iter_mut() {
+        if p.1 {
+            commands
+                .spawn()
+                .insert_bundle(SpriteBundle {
+                    transform: Transform::from_translation(Vec3::new(
+                        align_on_grid(trans.translation.x),
+                        align_on_grid(trans.translation.y),
+                        0.0,
+                    )),
+                    sprite: Sprite {
+                        color: Color::rgb(0., 0., 0.),
+                        custom_size: Some(Vec2::new(PLAYER_SIZE, PLAYER_SIZE)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .insert(Bomb(
+                    p.0,
+                    Timer::new(Duration::from_secs(BOMB_COUNTDOWN), false),
+                ))
+                .insert(NotTraversable)
+                .insert(Size(CELL_SIZE));
+            p.1 = false;
+        }
     }
 }
 
