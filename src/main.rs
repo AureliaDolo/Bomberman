@@ -10,15 +10,16 @@ const WINDOW_WIDTH: f32 = 480.;
 const WINDOW_HEIGHT: f32 = WINDOW_WIDTH;
 const CELL_PER_ROW_COUNT: u32 = 11;
 const CELL_SIZE: f32 = WINDOW_WIDTH / CELL_PER_ROW_COUNT as f32;
-const BOMB_COUNTDOWN: u64 = 3;
+const BOMB_COUNTDOWN: f32 = 3.;
 const PLAYER_SIZE: f32 = 0.85 * CELL_SIZE;
 const DELTA: f32 = 1.;
+const FRAME_DURATION: f64 = 1. / 60.;
 
 #[derive(Component)]
 struct Player(u8, bool);
 
 #[derive(Component)]
-struct Explosion;
+struct Explosion(Timer);
 
 #[derive(Component)]
 struct Bomb(u8, Timer);
@@ -73,11 +74,13 @@ fn main() {
         .add_startup_system(setup)
         .add_system(register_input.label(Step::Input).before(Step::Movement))
         .add_system(check_collision.label(Step::Input).before(Step::Movement))
-        .add_system(spawn_bombs.label(Step::Movement))
         .add_system_set(
             SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(1. / 60.))
-                .with_system(update_player_position.label(Step::Movement)),
+                .with_run_criteria(FixedTimestep::step(FRAME_DURATION))
+                .with_system(update_player_position.label(Step::Movement))
+                .with_system(spawn_bombs.label(Step::Movement))
+                .with_system(explode.label(Step::Movement))
+                .with_system(put_down_explosion.label(Step::Movement)),
         )
         .run();
 }
@@ -211,10 +214,7 @@ fn spawn_bombs(mut query: Query<(&mut Player, &Transform)>, mut commands: Comman
                     },
                     ..Default::default()
                 })
-                .insert(Bomb(
-                    p.0,
-                    Timer::new(Duration::from_secs(BOMB_COUNTDOWN), false),
-                ))
+                .insert(Bomb(p.0, Timer::from_seconds(BOMB_COUNTDOWN, false)))
                 .insert(NotTraversable)
                 .insert(Size(CELL_SIZE));
             p.1 = false;
@@ -253,12 +253,75 @@ fn check_collision(
 /// called at fixed timestamp
 /// if it exploded, spawn explosion
 /// despawn bomb
-fn explode(mut query: Query<&Bomb>) {}
+fn explode(
+    mut query: Query<(Entity, &mut Bomb, &Transform)>,
+    // obstacles: Query<(&Wall, &Transform)>,
+    mut commands: Commands,
+) {
+    let mut spawn = |x, y, com: &mut Commands| {
+        com.spawn()
+            .insert_bundle(SpriteBundle {
+                transform: Transform::from_translation(Vec3::new(x, y, 0.0)),
+                sprite: Sprite {
+                    color: Color::rgb(1., 0., 0.),
+                    custom_size: Some(Vec2::new(CELL_SIZE, CELL_SIZE)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert(Explosion(Timer::from_seconds(BOMB_COUNTDOWN, false)))
+            .insert(Size(CELL_SIZE));
+    };
+    for (e, mut b, trans) in query.iter_mut() {
+        b.1.tick(Duration::from_millis(
+            (FRAME_DURATION * 1000.).floor() as u64
+        ));
+        if b.1.finished() {
+            spawn(
+                align_on_grid(trans.translation.x),
+                align_on_grid(trans.translation.y),
+                &mut commands,
+            );
+            for i in 1..=b.0 {
+                spawn(
+                    align_on_grid(trans.translation.x + i as f32 * CELL_SIZE),
+                    align_on_grid(trans.translation.y),
+                    &mut commands,
+                );
+                spawn(
+                    align_on_grid(trans.translation.x),
+                    align_on_grid(trans.translation.y - i as f32 * CELL_SIZE),
+                    &mut commands,
+                );
+                spawn(
+                    align_on_grid(trans.translation.x - i as f32 * CELL_SIZE),
+                    align_on_grid(trans.translation.y),
+                    &mut commands,
+                );
+                spawn(
+                    align_on_grid(trans.translation.x),
+                    align_on_grid(trans.translation.y + i as f32 * CELL_SIZE),
+                    &mut commands,
+                );
+            }
+            commands.entity(e).despawn();
+        }
+    }
+}
 
 /// called at fixed timestamp
 /// check if explosion has elapsed
 /// despawn explosion
-fn put_down_explosion(mut query: Query<&Explosion>) {}
+fn put_down_explosion(mut query: Query<(Entity, &mut Explosion)>, mut commands: Commands) {
+    for (et, mut ex) in query.iter_mut() {
+        ex.0.tick(Duration::from_millis(
+            (FRAME_DURATION * 1000.).floor() as u64
+        ));
+        if ex.0.finished() {
+            commands.entity(et).despawn();
+        }
+    }
+}
 
 /// check collision with explosion
 fn check_death(mut query: Query<(With<Player>, &mut Transform)>) {}
