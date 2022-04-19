@@ -119,7 +119,7 @@ fn main() {
 fn setup(mut commands: Commands) {
     commands.spawn_bundle(OrthographicCameraBundle::new_2d());
 
-    // player
+    // player 1
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
@@ -144,6 +144,33 @@ fn setup(mut commands: Commands) {
             right: KeyCode::Right,
             left: KeyCode::Left,
             bomb: KeyCode::Space,
+        });
+
+    // player 2
+    commands
+        .spawn_bundle(SpriteBundle {
+            sprite: Sprite {
+                color: Color::rgb(0.75, 0.25, 0.25),
+                custom_size: Some(Vec2::new(PLAYER_SIZE, PLAYER_SIZE)),
+                ..Default::default()
+            },
+            transform: Transform::from_translation(Vec3::new(
+                cell_to_world(CELL_PER_ROW_COUNT - 2),
+                cell_to_world(CELL_PER_ROW_COUNT - 2),
+                0.0,
+            )),
+            ..Default::default()
+        })
+        .insert(Player::default())
+        .insert(Deltas::default())
+        .insert(NotTraversable)
+        .insert(Size(PLAYER_SIZE))
+        .insert(Keys {
+            up: KeyCode::Z,
+            down: KeyCode::S,
+            right: KeyCode::D,
+            left: KeyCode::Q,
+            bomb: KeyCode::W,
         });
 
     // walls
