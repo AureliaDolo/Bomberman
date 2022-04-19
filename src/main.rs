@@ -4,11 +4,12 @@ use bevy::{
     sprite::collide_aabb::{collide, Collision},
 };
 use glam::Vec2;
+use std::process::exit;
 use std::time::Duration;
 
 const WINDOW_WIDTH: f32 = 480.;
 const WINDOW_HEIGHT: f32 = WINDOW_WIDTH;
-const CELL_PER_ROW_COUNT: u32 = 11;
+const CELL_PER_ROW_COUNT: u8 = 11;
 const CELL_SIZE: f32 = WINDOW_WIDTH / CELL_PER_ROW_COUNT as f32;
 const BOMB_COUNTDOWN: f32 = 3.;
 const PLAYER_SIZE: f32 = 0.85 * CELL_SIZE;
@@ -16,13 +17,28 @@ const DELTA: f32 = 1.;
 const FRAME_DURATION: f64 = 1. / 60.;
 
 #[derive(Component)]
-struct Player(u8, bool);
+struct Player {
+    bomb_range: u8,
+    bomb_set: bool,
+}
+
+impl Default for Player {
+    fn default() -> Self {
+        Player {
+            bomb_range: 1,
+            bomb_set: false,
+        }
+    }
+}
 
 #[derive(Component)]
 struct Explosion(Timer);
 
 #[derive(Component)]
-struct Bomb(u8, Timer);
+struct Bomb {
+    explosion_range: u8,
+    countdown: Timer,
+}
 
 #[derive(Component)]
 struct Wall;
@@ -37,6 +53,15 @@ struct Size(f32);
 struct Deltas {
     x: f32,
     y: f32,
+}
+
+#[derive(Component)]
+struct Keys {
+    up: KeyCode,
+    down: KeyCode,
+    right: KeyCode,
+    left: KeyCode,
+    bomb: KeyCode,
 }
 
 impl Deltas {
@@ -82,6 +107,12 @@ fn main() {
                 .with_system(explode.label(Step::Movement))
                 .with_system(put_down_explosion.label(Step::Movement)),
         )
+        .add_system_set(
+            SystemSet::new()
+                .with_run_criteria(FixedTimestep::step(FRAME_DURATION))
+                .with_system(check_death.label(Step::Death).after(Step::Movement))
+                .with_system(check_game_over.label(Step::Death).after(Step::Movement)),
+        )
         .run();
 }
 
@@ -96,13 +127,24 @@ fn setup(mut commands: Commands) {
                 custom_size: Some(Vec2::new(PLAYER_SIZE, PLAYER_SIZE)),
                 ..Default::default()
             },
-            transform: Transform::from_translation(Vec3::new(0., 0., 0.0)),
+            transform: Transform::from_translation(Vec3::new(
+                cell_to_world(1),
+                cell_to_world(1),
+                0.0,
+            )),
             ..Default::default()
         })
-        .insert(Player(1, false))
+        .insert(Player::default())
         .insert(Deltas::default())
         .insert(NotTraversable)
-        .insert(Size(PLAYER_SIZE));
+        .insert(Size(PLAYER_SIZE))
+        .insert(Keys {
+            up: KeyCode::Up,
+            down: KeyCode::Down,
+            right: KeyCode::Right,
+            left: KeyCode::Left,
+            bomb: KeyCode::Space,
+        });
 
     // walls
     (0..11)
@@ -127,9 +169,9 @@ fn setup(mut commands: Commands) {
                         ..Default::default()
                     },
                     transform: Transform::from_translation(Vec3::new(
-                        i as f32 * CELL_SIZE - (WINDOW_WIDTH - CELL_SIZE) / 2.,
-                        j as f32 * CELL_SIZE - (WINDOW_HEIGHT - CELL_SIZE) / 2.,
-                        0.0,
+                        cell_to_world(i),
+                        cell_to_world(j),
+                        1.0,
                     )),
                     ..Default::default()
                 })
@@ -144,30 +186,34 @@ fn align_on_grid(x: f32) -> f32 {
     cell * CELL_SIZE - WINDOW_WIDTH / 2. + CELL_SIZE / 2.
 }
 
+fn cell_to_world(x: u8) -> f32 {
+    x as f32 * CELL_SIZE - WINDOW_WIDTH / 2. + CELL_SIZE / 2.
+}
+
 /// take input into consideration
 /// todo: maybe spawn bomb
 fn register_input(
     keyboard_input: Res<Input<KeyCode>>,
-    mut query: Query<(&mut Player, &mut Deltas)>,
+    mut query: Query<(&mut Player, &mut Deltas, &Keys)>,
 ) {
-    for (mut p, mut delta) in query.iter_mut() {
-        if keyboard_input.pressed(KeyCode::Left) {
+    for (mut p, mut delta, k) in query.iter_mut() {
+        if keyboard_input.pressed(k.left) {
             delta.x -= DELTA;
         }
-        if keyboard_input.pressed(KeyCode::Right) {
+        if keyboard_input.pressed(k.right) {
             delta.x += DELTA;
         }
 
-        if keyboard_input.pressed(KeyCode::Up) {
+        if keyboard_input.pressed(k.up) {
             delta.y += DELTA;
         }
 
-        if keyboard_input.pressed(KeyCode::Down) {
+        if keyboard_input.pressed(k.down) {
             delta.y -= DELTA;
         }
 
-        if keyboard_input.just_pressed(KeyCode::Space) {
-            p.1 = true;
+        if keyboard_input.just_pressed(k.bomb) {
+            p.bomb_set = true;
         }
 
         delta.norm();
@@ -198,7 +244,7 @@ fn update_player_position(mut query: Query<(With<Player>, &mut Deltas, &mut Tran
 
 fn spawn_bombs(mut query: Query<(&mut Player, &Transform)>, mut commands: Commands) {
     for (mut p, trans) in query.iter_mut() {
-        if p.1 {
+        if p.bomb_set {
             commands
                 .spawn()
                 .insert_bundle(SpriteBundle {
@@ -214,10 +260,13 @@ fn spawn_bombs(mut query: Query<(&mut Player, &Transform)>, mut commands: Comman
                     },
                     ..Default::default()
                 })
-                .insert(Bomb(p.0, Timer::from_seconds(BOMB_COUNTDOWN, false)))
+                .insert(Bomb {
+                    explosion_range: p.bomb_range,
+                    countdown: Timer::from_seconds(BOMB_COUNTDOWN, false),
+                })
                 .insert(NotTraversable)
                 .insert(Size(CELL_SIZE));
-            p.1 = false;
+            p.bomb_set = false;
         }
     }
 }
@@ -258,7 +307,7 @@ fn explode(
     // obstacles: Query<(&Wall, &Transform)>,
     mut commands: Commands,
 ) {
-    let mut spawn = |x, y, com: &mut Commands| {
+    let spawn = |x, y, com: &mut Commands| {
         com.spawn()
             .insert_bundle(SpriteBundle {
                 transform: Transform::from_translation(Vec3::new(x, y, 0.0)),
@@ -273,16 +322,16 @@ fn explode(
             .insert(Size(CELL_SIZE));
     };
     for (e, mut b, trans) in query.iter_mut() {
-        b.1.tick(Duration::from_millis(
+        b.countdown.tick(Duration::from_millis(
             (FRAME_DURATION * 1000.).floor() as u64
         ));
-        if b.1.finished() {
+        if b.countdown.finished() {
             spawn(
                 align_on_grid(trans.translation.x),
                 align_on_grid(trans.translation.y),
                 &mut commands,
             );
-            for i in 1..=b.0 {
+            for i in 1..=b.explosion_range {
                 spawn(
                     align_on_grid(trans.translation.x + i as f32 * CELL_SIZE),
                     align_on_grid(trans.translation.y),
@@ -324,65 +373,27 @@ fn put_down_explosion(mut query: Query<(Entity, &mut Explosion)>, mut commands: 
 }
 
 /// check collision with explosion
-fn check_death(mut query: Query<(With<Player>, &mut Transform)>) {}
-
-fn player(
-    keyboard_input: Res<Input<KeyCode>>,
+fn check_death(
+    mut players: Query<(Entity, &Transform, With<Player>, &Size)>,
     mut commands: Commands,
-    mut query: Query<(With<Player>, &mut Transform)>,
+    obstacles: Query<(&Transform, With<Explosion>, &Size)>,
 ) {
-    const DELTA: f32 = 1.;
-
-    for (_, mut trans) in query.iter_mut() {
-        let mut bomb = false;
-
-        if keyboard_input.pressed(KeyCode::Left) {
-            trans.translation.x -= DELTA;
+    for (e, tp, _, ps) in players.iter_mut() {
+        for (to, _, os) in obstacles.iter() {
+            if let Some(_) = collide(
+                tp.translation,
+                Vec2::new(ps.0, ps.0),
+                to.translation,
+                Vec2::new(os.0, os.0),
+            ) {
+                commands.entity(e).despawn();
+            }
         }
-        if keyboard_input.pressed(KeyCode::Right) {
-            trans.translation.x += DELTA;
-        }
+    }
+}
 
-        if keyboard_input.pressed(KeyCode::Up) {
-            trans.translation.y += DELTA;
-        }
-
-        if keyboard_input.pressed(KeyCode::Down) {
-            trans.translation.y -= DELTA;
-        }
-        if keyboard_input.just_pressed(KeyCode::Space) {
-            bomb = true;
-        }
-
-        // Apply movement deltas
-
-        trans.translation.x = trans.translation.x.clamp(
-            (-WINDOW_WIDTH + PLAYER_SIZE) / 2.,
-            (WINDOW_WIDTH - PLAYER_SIZE) / 2.,
-        );
-
-        trans.translation.y = trans.translation.y.clamp(
-            (-WINDOW_HEIGHT + PLAYER_SIZE) / 2.,
-            (WINDOW_HEIGHT - PLAYER_SIZE) / 2.,
-        );
-
-        // if bomb {
-        //     commands
-        //         .spawn()
-        //         .insert_bundle(SpriteBundle {
-        //             transform: Transform::from_translation(Vec3::new(
-        //                 trans.translation.x,
-        //                 trans.translation.y,
-        //                 0.0,
-        //             )),
-        //             sprite: Sprite {
-        //                 color: Color::rgb(0., 0., 0.),
-        //                 custom_size: Some(Vec2::new(PLAYER_SIZE, PLAYER_SIZE)),
-        //                 ..Default::default()
-        //             },
-        //             ..Default::default()
-        //         })
-        //         .insert(Bomb);
-        // }
+fn check_game_over(mut query: Query<(Entity, With<Player>)>) {
+    if query.iter().next().is_none() {
+        exit(1)
     }
 }
