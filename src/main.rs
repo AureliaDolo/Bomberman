@@ -4,6 +4,8 @@ use bevy::{
     sprite::collide_aabb::{collide, Collision},
 };
 use glam::Vec2;
+use itertools::Itertools;
+use rand::random;
 use std::process::exit;
 use std::time::Duration;
 
@@ -15,6 +17,7 @@ const BOMB_COUNTDOWN: f32 = 3.;
 const PLAYER_SIZE: f32 = 0.85 * CELL_SIZE;
 const DELTA: f32 = 1.;
 const FRAME_DURATION: f64 = 1. / 60.;
+const BREAKABLE_PROPORTION: f32 = 0.5;
 
 #[derive(Component)]
 struct Player {
@@ -43,6 +46,8 @@ struct Bomb {
 #[derive(Component)]
 struct Wall;
 
+#[derive(Component)]
+struct Breakable;
 #[derive(Component)]
 struct NotTraversable;
 
@@ -111,7 +116,8 @@ fn main() {
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(FRAME_DURATION))
                 .with_system(check_death.label(Step::Death).after(Step::Movement))
-                .with_system(check_game_over.label(Step::Death).after(Step::Movement)),
+                .with_system(check_game_over.label(Step::Death).after(Step::Movement))
+                .with_system(check_destruction.label(Step::Death).after(Step::Movement)),
         )
         .run();
 }
@@ -206,6 +212,28 @@ fn setup(mut commands: Commands) {
                 .insert(NotTraversable)
                 .insert(Size(CELL_SIZE));
         });
+
+    for (x, y) in (2..CELL_PER_ROW_COUNT - 2).cartesian_product(2..CELL_PER_ROW_COUNT - 2) {
+        if random::<f32>() < BREAKABLE_PROPORTION {
+            commands
+                .spawn_bundle(SpriteBundle {
+                    sprite: Sprite {
+                        color: Color::rgb(0.8, 0.8, 0.8),
+                        custom_size: Some(Vec2::new(CELL_SIZE, CELL_SIZE)),
+                        ..Default::default()
+                    },
+                    transform: Transform::from_translation(Vec3::new(
+                        cell_to_world(x),
+                        cell_to_world(y),
+                        0.,
+                    )),
+                    ..Default::default()
+                })
+                .insert(Breakable)
+                .insert(NotTraversable)
+                .insert(Size(CELL_SIZE));
+        }
+    }
 }
 
 fn align_on_grid(x: f32) -> f32 {
@@ -329,11 +357,7 @@ fn check_collision(
 /// called at fixed timestamp
 /// if it exploded, spawn explosion
 /// despawn bomb
-fn explode(
-    mut query: Query<(Entity, &mut Bomb, &Transform)>,
-    // obstacles: Query<(&Wall, &Transform)>,
-    mut commands: Commands,
-) {
+fn explode(mut query: Query<(Entity, &mut Bomb, &Transform)>, mut commands: Commands) {
     let spawn = |x, y, com: &mut Commands| {
         com.spawn()
             .insert_bundle(SpriteBundle {
@@ -414,6 +438,25 @@ fn check_death(
                 Vec2::new(os.0, os.0),
             ) {
                 commands.entity(e).despawn();
+            }
+        }
+    }
+}
+
+fn check_destruction(
+    mut breakable: Query<(Entity, With<Breakable>, &Size, &Transform)>,
+    mut commands: Commands,
+    obstacles: Query<(&Transform, With<Explosion>, &Size)>,
+) {
+    for (eb, _, sb, tb) in breakable.iter_mut() {
+        for (to, _, os) in obstacles.iter() {
+            if let Some(_) = collide(
+                tb.translation,
+                Vec2::new(sb.0, sb.0),
+                to.translation,
+                Vec2::new(os.0, os.0),
+            ) {
+                commands.entity(eb).despawn();
             }
         }
     }
